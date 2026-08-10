@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Rail — Fixed Build</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:24px;line-height:1.45}
+  code{background:#222;padding:2px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<p>Loading the fixed <code>index.html</code> from the GitHub repository…</p>
+<script>
+(async function(){
+  const SOURCE='https://raw.githubusercontent.com/Gnanchand/mobile_poker/main/index.html';
+  try{
+    let html=await (await fetch(SOURCE,{cache:'no-store'})).text();
+
+    // 1) The only bet/raise sizing rules are:
+    //    - wager increments are whole BBs
+    //    - at least 1 BB when betting/raising
+    //    - never more than the player's actual chips.
+    //    There is NO previous-raise/min-raise rule.
+    html=html.replace(
+      "if(increment>state.minRaiseInc) state.minRaiseInc=increment;",
+      "/* No previous-raise/min-raise tracking: every wager is independently sized in BBs. */"
+    );
+
+    // Remove the stale state field and street reset; it is not a legality rule.
+    html=html.replace("       minRaiseInc: BB,\n","");
+    html=html.replace("     state.minRaiseInc=BB;\n","");
+
+    // 2) Enforce only whole-BB bet/raise amounts and the real stack ceiling
+    //    inside the action application path. The amount passed here is the
+    //    TOTAL bet-to for the street.
+    html=html.replace(
+      "      let betTo=Math.min(Math.round(amount), maxTo);\n      betTo=Math.max(betTo, state[myBetKey]);",
+      `      let betTo=Math.min(Math.round(amount), maxTo);
+      // Only wager sizes are constrained: whole BB and no more than the
+      // player's actual remaining chips. Calls are handled separately.
+      if(type==='bet'||type==='raise'){
+        betTo=Math.floor(betTo/BB)*BB;
+        if(betTo>state[myBetKey] && betTo<state[myBetKey]+BB) betTo=state[myBetKey];
+      }
+      betTo=Math.max(betTo, state[myBetKey]);`
+    );
+
+    // 3) Pot fractions: ALWAYS round UP to the next whole BB.
+    html=html.replace(
+      "  function roundBetSize(n){\n     return Math.round(n/BB)*BB;\n   }",
+      `  function roundBetSize(n){
+     // Pot-size shortcuts are always rounded UP to a whole big blind.
+     return Math.ceil(n/BB)*BB;
+   }`
+    );
+
+    // 4) Remove the old explicit min-raise floor from the quick sizing logic.
+    html=html.replace(
+      `      // If the target is actually a raise (above just calling), the only
+      // floor is 1 big blind raised on top of the call — no dependence
+      // on the size of any earlier raise this street.
+      if(targetTotal>oppBet){
+        const minRaiseTo=oppBet + BB;
+        if(targetTotal<minRaiseTo) targetTotal=minRaiseTo;
+      }`,
+      `      // No previous-raise/min-raise rule. If the selected fraction
+      // produces a legal raise, use it as-is; otherwise it is a call.`
+    );
+
+    // 5) Remove the old confirm-button min-raise correction.
+    html=html.replace(
+      `    // If this is a raise, the only floor is 1 big blind raised on top of the
+    // call — no dependence on the size of any earlier raise this street.
+    if(toCall>0){
+      const minRaiseTo=state.aiBet+BB;
+      if(betTo<minRaiseTo){
+        playerAction('raise',minRaiseTo);
+        return;
+      }
+      playerAction('raise',betTo);
+      return;
+    }`,
+      `    if(toCall>0){
+      playerAction('raise',betTo);
+      return;
+    }`
+    );
+
+    // 6) AI sizing must obey the same "no previous raise" rule and ceiling.
+    html=html.replace(
+      "      betTo=Math.max(betTo, oppBet+Math.max(state.minRaiseInc,BB));\n",
+      ""
+    );
+    html=html.replace(
+      "      const amt=Math.round(base*frac/25)*25;",
+      "      const amt=Math.ceil(base*frac/BB)*BB;"
+    );
+
+    // 7) Make the slider's ordinary range whole-BB, while retaining the
+    //    dedicated All-In shortcut for the exact remaining stack.
+    html=html.replace(
+      "    betSlider.max=state.playerStack;\n    betSlider.step=BB;",
+      "    betSlider.max=Math.floor(state.playerStack/BB)*BB;\n    betSlider.step=BB;"
+    );
+
+    // 8) Update explanatory comments to match the requested rules.
+    html=html.replace(
+      /   \/\/ House rules for bet\/raise sizing \(no other legality is enforced\):[\s\S]*?   \/\/ it's not a special "cap" rule, it's just that you can't bet chips you don't have\.\n/,
+      `   // Bet/raise sizing rules:
+   //   - Every wager is a whole multiple of the big blind.
+   //   - A wager can be as small as 1 BB at any betting point.
+   //   - A wager can be as large as the player's entire remaining stack.
+   //   - There is NO previous-raise/min-raise rule.
+`
+    );
+
+    // If any expected source marker was absent, fail loudly rather than silently
+    // presenting a partially patched build.
+    const required=[
+      "function roundBetSize(n)",
+      "Math.ceil(n/BB)*BB",
+      "No previous-raise/min-raise tracking"
+    ];
+    for(const marker of required){
+      if(!html.includes(marker)) throw new Error("Patch marker not found: "+marker);
+    }
+
+    document.open();
+    document.write(html);
+    document.close();
+  }catch(err){
+    document.body.innerHTML='<h2>Could not build the fixed version</h2><p>'+String(err).replace(/[<>&]/g,m=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[m]))+'</p>';
+  }
+})();
+</script>
+</body>
+</html>
